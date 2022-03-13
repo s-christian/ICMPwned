@@ -9,6 +9,16 @@ import (
 	"unsafe"
 )
 
+const (
+	// Completely magic variables used for raw Windows ICMP sockets
+	SIO_RCVALL = syscall.IOC_IN | syscall.IOC_VENDOR | 1
+
+	RCVALL_OFF             = 0
+	RCVALL_ON              = 1
+	RCVALL_SOCKETLEVELONLY = 2
+	RCVALL_IPLEVEL         = 3
+)
+
 /*
 	Creates and returns an ICMP connection to read from and write to.
 
@@ -25,10 +35,6 @@ func ListenICMP(listenAddress string) (net.PacketConn, error) {
 
 	var conn net.PacketConn
 	var err error
-
-	/*
-
-	 */
 
 	var socketHandle syscall.Handle
 	cfg := net.ListenConfig{

