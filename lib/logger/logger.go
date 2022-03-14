@@ -55,7 +55,7 @@ var MapTypesToPrefix = map[logType]string{
 func Log(messageType logType, messages ...string) {
 	fmt.Printf("%s (%s)\t%s\n",
 		MapTypesToPrefix[messageType],
-		time.Now().Format(time.RFC3339Nano),
+		time.Now().Format(time.RFC3339),
 		MapTypesToColor[messageType].Sprint(strings.Join(messages, " ")),
 	)
 }
@@ -69,7 +69,7 @@ func LogPlain(messageType logType, messages ...string) {
 func LogReturn(messageType logType, messages ...string) string {
 	return fmt.Sprintf("%s (%s)\t%s",
 		MapTypesToPrefix[messageType],
-		time.Now().Format(time.RFC3339Nano),
+		time.Now().Format(time.RFC3339),
 		MapTypesToColor[messageType].Sprint(strings.Join(messages, " ")),
 	)
 }
